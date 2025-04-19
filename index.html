@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PrivacyVet</title>
+    <meta name="description" content="PrivacyVet to help you not break the law!" />
+    <meta name="author" content="PrivacyVet" />
+    <meta property="og:image" content="/logo.png" />
+    <link rel="icon" href="/logo.png" type="image/png" />
+
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <!-- IMPORTANT: DO NOT REMOVE THIS SCRIPT TAG OR THIS VERY COMMENT! -->
+    <script src="https://cdn.gpteng.co/gptengineer.js" type="module"></script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+  <script>
+    // Debug information
+    console.log("Loading cookie consent banner for domain: https://www.privacyvet.com");
+    
+    // Load the cookie consent script
+    (function() {
+      try {
+        // Create container for the cookie consent
+        if (!document.getElementById('cookie-consent-container')) {
+          const container = document.createElement('div');
+          container.id = 'cookie-consent-container';
+          document.body.appendChild(container);
+          console.log("Cookie consent container created");
+        }
+        
+        // For local testing, we'll use a special parameter
+        const isLocalhost = window.location.hostname === 'localhost' || 
+                            window.location.hostname === '127.0.0.1' ||
+                            window.location.hostname.includes('.local');
+        
+        // Get the actual domain or use the configured one for local testing
+        const currentDomain = isLocalhost ? "https://www.privacyvet.com" : window.location.hostname;
+        console.log("Using domain for verification:", currentDomain);
+        
+        // Load the script
+        const script = document.createElement('script');
+        script.src = "https://cookiebot1.vercel.app/api/cookie-consent?key=demo-api-key&domain=" + currentDomain + "&t=1744908418165&debug=true";
+        script.async = true;
+        
+        script.onerror = function(e) {
+          console.error("Failed to load cookie consent script:", e);
+          console.log("Script URL attempted:", script.src);
+          console.log("Please check that:");
+          console.log("1. The domain is correctly configured in your cookie consent settings");
+          console.log("2. The API endpoint is accessible");
+          console.log("3. CORS is properly configured if testing across domains");
+        };
+        
+        script.onload = function() {
+          console.log("Cookie consent script loaded successfully");
+        };
+        
+        document.body.appendChild(script);
+      } catch(e) {
+        console.error("Error initializing cookie consent:", e);
+      }
+    })();
+  </script>
+</html>

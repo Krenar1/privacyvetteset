@@ -1,0 +1,1 @@
+You can run this project also by just running: docker-compose up --build
