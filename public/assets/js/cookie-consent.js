@@ -1,33 +1,39 @@
 /**
  * PrivacyVet Cookie Consent Manager
- * A customizable cookie consent solution for websites
+ * Version 2.0.1
+ * 
+ * This script handles cookie consent collection across websites.
+ * It displays a cookie banner with customizable categories and settings.
+ * Settings are synchronized with the PrivacyVet server.
  */
-
 (function() {
-  // Global namespace for PrivacyVet
-  window.PrivacyVet = window.PrivacyVet || {};
-  
+  'use strict';
+
   // Get script attributes
-  const currentScript = document.currentScript || (function() {
+  const script = document.currentScript || (function() {
+    // Fallback for when the script is loaded asynchronously
     const scripts = document.getElementsByTagName('script');
     return scripts[scripts.length - 1];
   })();
-
-  const domainId = currentScript.getAttribute('data-domain-id') || '';
-  const domain = currentScript.getAttribute('data-domain') || window.location.hostname;
   
-  // Default settings
+  const domainId = script.getAttribute('data-domain-id');
+  const domain = script.getAttribute('data-domain') || window.location.hostname;
+  const apiUrl = script.getAttribute('data-api-url') || 'https://privacyvet.com/api/cookie-settings';
+  const autoInit = script.getAttribute('data-auto-init') !== 'false';
+  const version = '2.0.1';
+
+  // Default settings (will be overridden by server settings)
   const defaultSettings = {
     position: 'bottom',
-    theme: 'light',
-    showLogo: true,
+    theme: 'dark', // Set to dark theme as requested
+    showLogo: true, // Ensure logo is shown
     customization: {
       primaryColor: '#3b82f6',
-      backgroundColor: '#ffffff',
-      textColor: '#1f2937',
+      backgroundColor: '#1f2937', // Dark background for dark theme
+      textColor: '#f9fafb', // Light text for dark theme
       buttonTextColor: '#ffffff',
-      font: 'Inter',
-      cornerRadius: 6,
+      font: 'Inter, system-ui, sans-serif',
+      cornerRadius: 6
     },
     cookieCategories: {
       necessary: true,
@@ -43,12 +49,27 @@
       rejectAllButton: 'Reject All',
       customizeButton: 'Customize',
       savePreferencesButton: 'Save Preferences',
+    },
+    advanced: {
+      autoBlockCookies: true,
+      respectDnt: true,
+      collectAnalytics: true,
+      expireDays: 180,
+      customTermsUrl: '',
+      customPrivacyUrl: '',
+    },
+    scripts: {
+      beforeAcceptScript: '',
+      afterAcceptScript: '',
+      cookieScript: '',
     }
   };
 
-  // Storage keys
-  const CONSENT_STORAGE_KEY = `privacyvet-consent-${domain}`;
-  const SETTINGS_STORAGE_KEY = `privacyvet-settings-${domainId}`;
+  // Storage keys - add a version to force reset when script is updated
+  const CONSENT_STORAGE_KEY = `privacyvet-consent-${domain}-${version}`;
+  const SETTINGS_CACHE_KEY = `privacyvet-settings-${domainId}-${version}`;
+  const SETTINGS_CACHE_TIME_KEY = `privacyvet-settings-time-${domainId}-${version}`;
+  const CACHE_MAX_AGE = 3600000; // 1 hour in milliseconds
   
   // State variables
   let settings = { ...defaultSettings };
@@ -62,60 +83,175 @@
   let bannerElement = null;
   let modalElement = null;
   let consentChangeCallbacks = [];
+  let hasSettingsLoaded = false;
   
   /**
    * Initialize the Cookie Consent Manager
    */
   function init() {
-    loadSettings();
+    // Detect Do Not Track setting
+    const dnt = navigator.doNotTrack || window.doNotTrack || navigator.msDoNotTrack;
+    const isDntEnabled = (dnt === '1' || dnt === 'yes');
+    
+    // Load consent from storage
     loadConsent();
     
-    // If no consent is stored, show the banner
-    if (!hasConsent()) {
-      createBanner();
-    }
+    // Load settings
+    loadSettings().then(() => {
+      // Check if we should respect DNT
+      if (settings.advanced.respectDnt && isDntEnabled) {
+        // If DNT is enabled, set minimal consent and skip showing the banner
+        consent = {
+          necessary: true,
+          preferences: false,
+          analytics: false,
+          marketing: false,
+          thirdParty: false
+        };
+        saveConsent();
+        return;
+      }
+      
+      // Only show banner if consent hasn't been given yet
+      if (!hasConsent()) {
+        // Wait for DOM to be fully loaded before showing the banner
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', createBanner);
+        } else {
+          createBanner();
+        }
+      } else if (settings.scripts.cookieScript) {
+        // If consent was already given and we have cookie scripts to load, load them
+        try {
+          new Function(settings.scripts.cookieScript)();
+        } catch (error) {
+          console.error('Error executing cookie script:', error);
+        }
+      }
+      
+      // Apply custom CSS if provided
+      if (settings.advanced.customCss) {
+        const styleEl = document.createElement('style');
+        styleEl.textContent = settings.advanced.customCss;
+        document.head.appendChild(styleEl);
+      }
+
+      // If analytics collection is enabled and the user has consented to analytics, send analytics data
+      if (settings.advanced.collectAnalytics && consent.analytics) {
+        sendAnalyticsData();
+      }
+    });
     
     // Expose public API
-    window.PrivacyVet = {
-      showConsentModal: showModal,
-      isAllowed: isAllowed,
-      getConsent: getConsent,
-      onConsentChange: onConsentChange
+    window.privacyVetConsent = {
+      getConsent,
+      isAllowed,
+      onConsentChange,
+      showPreferences: showModal
     };
   }
   
   /**
-   * Load settings from localStorage or API
+   * Send analytics data to the server
    */
-  function loadSettings() {
+  function sendAnalyticsData() {
+    // Only send if we have a domain ID
+    if (!domainId) return;
+    
+    // Create a simple analytics event
+    const analyticsUrl = apiUrl.replace('cookie-settings', 'cookie-analytics');
+    
+    // Use sendBeacon if available (works even if page is unloading)
+    if (navigator.sendBeacon) {
+      const data = new Blob([JSON.stringify({
+        domain_id: domainId,
+        event: 'pageview',
+        url: window.location.href,
+        referrer: document.referrer,
+        screen_width: window.screen.width,
+        screen_height: window.screen.height,
+        user_agent: navigator.userAgent
+      })], { type: 'application/json' });
+      navigator.sendBeacon(analyticsUrl, data);
+    } else {
+      // Fallback to fetch API
+      fetch(analyticsUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          domain_id: domainId,
+          event: 'pageview',
+          url: window.location.href,
+          referrer: document.referrer,
+          screen_width: window.screen.width,
+          screen_height: window.screen.height,
+          user_agent: navigator.userAgent
+        }),
+        // Use keepalive to ensure the request completes even if page is unloading
+        keepalive: true
+      }).catch(error => {
+        // Ignore errors for analytics
+        console.debug('Failed to send analytics:', error);
+      });
+    }
+  }
+  
+  /**
+   * Load settings from localStorage cache or API
+   */
+  async function loadSettings() {
+    if (!domainId) {
+      console.error('PrivacyVet: No domain ID provided. Using default settings.');
+      hasSettingsLoaded = true;
+      return;
+    }
+    
     try {
-      // Try to get settings from localStorage
-      const storedSettings = localStorage.getItem(SETTINGS_STORAGE_KEY);
-      if (storedSettings) {
-        const parsedSettings = JSON.parse(storedSettings);
-        settings = { ...settings, ...parsedSettings };
-        return;
-      }
+      // Try to load settings from cache first
+      const cachedSettings = localStorage.getItem(SETTINGS_CACHE_KEY);
+      const cachedTime = parseInt(localStorage.getItem(SETTINGS_CACHE_TIME_KEY) || '0');
+      const now = Date.now();
       
-      // If no settings in localStorage, try to fetch from API
-      fetchSettings();
+      // If we have valid cached settings that aren't too old, use them
+      if (cachedSettings && (now - cachedTime < CACHE_MAX_AGE)) {
+        settings = { ...defaultSettings, ...JSON.parse(cachedSettings) };
+        hasSettingsLoaded = true;
+      } else {
+        // Otherwise, fetch from API
+        await fetchSettings();
+      }
     } catch (error) {
       console.error('Failed to load PrivacyVet settings:', error);
+      hasSettingsLoaded = true;
     }
   }
   
   /**
    * Fetch settings from the API
    */
-  function fetchSettings() {
+  async function fetchSettings() {
     if (!domainId) return;
     
-    // This would be a real API call in production
-    // For now, we'll just use a timeout to simulate an API call
-    setTimeout(() => {
-      // In a real implementation, you would fetch settings from an API
-      console.log(`PrivacyVet: Would fetch settings for domain ID ${domainId}`);
-    }, 100);
+    try {
+      const response = await fetch(`${apiUrl}/${domainId}`);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch settings: ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      if (data && data.settings) {
+        // Update settings with server data
+        settings = { ...defaultSettings, ...data.settings };
+        
+        // Cache the settings
+        localStorage.setItem(SETTINGS_CACHE_KEY, JSON.stringify(data.settings));
+        localStorage.setItem(SETTINGS_CACHE_TIME_KEY, Date.now().toString());
+      }
+    } catch (error) {
+      console.error('Failed to fetch PrivacyVet settings:', error);
+    } finally {
+      hasSettingsLoaded = true;
+    }
   }
   
   /**
@@ -133,14 +269,82 @@
   }
   
   /**
-   * Save consent to localStorage
+   * Save consent to localStorage and notify server
    */
   function saveConsent() {
     try {
+      // Save to localStorage
       localStorage.setItem(CONSENT_STORAGE_KEY, JSON.stringify(consent));
+      
+      // Notify server if we have a domain ID
+      if (domainId) {
+        const consentData = {
+          domain: domainId,
+          necessary: consent.necessary,
+          preferences: consent.preferences,
+          analytics: consent.analytics,
+          marketing: consent.marketing,
+          third_party: consent.thirdParty
+        };
+        
+        // Use sendBeacon if available, as it works even when the page is unloading
+        if (navigator.sendBeacon) {
+          const blob = new Blob([JSON.stringify(consentData)], { type: 'application/json' });
+          navigator.sendBeacon(`${apiUrl.replace('cookie-settings', 'cookie-consents')}`, blob);
+        } else {
+          // Fallback to fetch API
+          fetch(apiUrl.replace('cookie-settings', 'cookie-consents'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(consentData),
+            keepalive: true // This helps ensure the request completes even if page is unloading
+          }).catch(error => {
+            // Silently catch errors, as this is non-critical
+            console.debug('Failed to send consent to server:', error);
+          });
+        }
+      }
+      
+      // Notify callbacks
       notifyConsentChange();
+      
+      // Execute any scripts now that consent is given
+      executeScripts();
+      
     } catch (error) {
       console.error('Failed to save PrivacyVet consent:', error);
+    }
+  }
+  
+  /**
+   * Execute scripts based on consent
+   */
+  function executeScripts() {
+    // Execute before accept script if available
+    if (settings.scripts.beforeAcceptScript) {
+      try {
+        new Function(settings.scripts.beforeAcceptScript)();
+      } catch (error) {
+        console.error('Error executing before accept script:', error);
+      }
+    }
+    
+    // Execute cookie loading script if available
+    if (settings.scripts.cookieScript) {
+      try {
+        new Function(settings.scripts.cookieScript)();
+      } catch (error) {
+        console.error('Error executing cookie script:', error);
+      }
+    }
+    
+    // Execute after accept script if available
+    if (settings.scripts.afterAcceptScript) {
+      try {
+        new Function(settings.scripts.afterAcceptScript)();
+      } catch (error) {
+        console.error('Error executing after accept script:', error);
+      }
     }
   }
   
@@ -171,8 +375,12 @@
   function onConsentChange(callback) {
     if (typeof callback === 'function') {
       consentChangeCallbacks.push(callback);
+      // Immediately call with current consent
+      callback({ ...consent });
     }
-    return () => {
+    
+    // Return a function to unregister the callback
+    return function unregister() {
       consentChangeCallbacks = consentChangeCallbacks.filter(cb => cb !== callback);
     };
   }
@@ -181,12 +389,12 @@
    * Notify all callbacks about consent changes
    */
   function notifyConsentChange() {
-    const currentConsent = getConsent();
+    const consentCopy = { ...consent };
     consentChangeCallbacks.forEach(callback => {
       try {
-        callback(currentConsent);
+        callback(consentCopy);
       } catch (error) {
-        console.error('Error in onConsentChange callback:', error);
+        console.error('Error in consent change callback:', error);
       }
     });
   }
@@ -197,111 +405,195 @@
   function createBanner() {
     if (bannerElement) return;
     
-    // Create banner element
+    // Create banner container
     bannerElement = document.createElement('div');
-    bannerElement.id = 'privacyvet-banner';
-    bannerElement.style.cssText = `
-      position: fixed;
-      ${getPositionStyles(settings.position)};
-      z-index: 999999;
-      padding: 16px;
-      margin: 16px;
-      max-width: 420px;
-      background-color: ${settings.customization.backgroundColor};
-      color: ${settings.customization.textColor};
-      border-radius: ${settings.customization.cornerRadius}px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-      font-family: ${settings.customization.font}, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      box-sizing: border-box;
-    `;
+    bannerElement.className = 'privacyvet-banner';
+    bannerElement.setAttribute('role', 'dialog');
+    bannerElement.setAttribute('aria-labelledby', 'privacyvet-banner-title');
+    bannerElement.setAttribute('aria-describedby', 'privacyvet-banner-description');
     
-    // Banner content
-    bannerElement.innerHTML = `
-      <div style="margin-bottom: 12px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-          <h3 style="margin: 0; font-size: 18px; font-weight: 600;">${settings.consentText.title}</h3>
-          ${settings.showLogo ? `
-            <img src="/assets/logo.png" alt="PrivacyVet" style="height: 28px;" />
-          ` : ''}
-        </div>
-        <p style="margin: 0; font-size: 14px; line-height: 1.5;">
-          ${settings.consentText.description}
-        </p>
-      </div>
-      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-        <button id="privacyvet-accept-all" style="
-          flex: 1;
-          padding: 8px 16px;
-          border: none;
-          border-radius: ${settings.customization.cornerRadius}px;
-          background-color: ${settings.customization.primaryColor};
-          color: ${settings.customization.buttonTextColor};
-          font-weight: 600;
-          font-size: 14px;
-          cursor: pointer;
-        ">${settings.consentText.acceptAllButton}</button>
-        <button id="privacyvet-reject-all" style="
-          flex: 1;
-          padding: 8px 16px;
-          border: 1px solid ${settings.customization.primaryColor}; 
-          border-radius: ${settings.customization.cornerRadius}px;
-          background-color: transparent;
-          color: ${settings.customization.primaryColor};
-          font-weight: 600;
-          font-size: 14px;
-          cursor: pointer;
-        ">${settings.consentText.rejectAllButton}</button>
-        <button id="privacyvet-customize" style="
-          flex: 1;
-          padding: 8px 16px;
-          border: none;
-          border-radius: ${settings.customization.cornerRadius}px;
-          background-color: transparent;
-          color: ${settings.customization.textColor};
-          text-decoration: underline;
-          font-size: 14px;
-          cursor: pointer;
-        ">${settings.consentText.customizeButton}</button>
-      </div>
-    `;
+    // Apply position styles
+    const positionStyles = getPositionStyles(settings.position);
+    Object.assign(bannerElement.style, {
+      position: 'fixed',
+      zIndex: '9999',
+      boxSizing: 'border-box',
+      fontFamily: settings.customization.font,
+      backgroundColor: settings.customization.backgroundColor,
+      color: settings.customization.textColor,
+      boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+      borderRadius: `${settings.customization.cornerRadius}px`,
+      padding: '20px',
+      maxWidth: ['bottom', 'top'].includes(settings.position) ? 'none' : '400px',
+      width: ['bottom', 'top'].includes(settings.position) ? '100%' : 'auto',
+      ...positionStyles
+    });
     
+    // Create content
+    const content = document.createElement('div');
+    content.style.marginBottom = '16px';
+    
+    // Add logo if enabled - Always show "Powered by PrivacyVet" in the banner
+    const logo = document.createElement('div');
+    logo.style.marginBottom = '8px';
+    logo.style.fontSize = '12px';
+    logo.style.color = settings.customization.textColor;
+    logo.style.opacity = '0.7';
+    logo.textContent = 'Powered by PrivacyVet';
+    content.appendChild(logo);
+    
+    // Add title
+    const title = document.createElement('div');
+    title.id = 'privacyvet-banner-title';
+    title.style.fontSize = '18px';
+    title.style.fontWeight = 'bold';
+    title.style.marginBottom = '8px';
+    title.textContent = settings.consentText.title;
+    content.appendChild(title);
+    
+    // Add description
+    const description = document.createElement('div');
+    description.id = 'privacyvet-banner-description';
+    description.style.marginBottom = '16px';
+    description.textContent = settings.consentText.description;
+    content.appendChild(description);
+    
+    // Add links if provided
+    if (settings.advanced.customTermsUrl || settings.advanced.customPrivacyUrl) {
+      const links = document.createElement('div');
+      links.style.marginBottom = '16px';
+      links.style.fontSize = '14px';
+      
+      if (settings.advanced.customTermsUrl) {
+        const termsLink = document.createElement('a');
+        termsLink.href = settings.advanced.customTermsUrl;
+        termsLink.target = '_blank';
+        termsLink.rel = 'noopener noreferrer';
+        termsLink.style.color = settings.customization.primaryColor;
+        termsLink.style.marginRight = '16px';
+        termsLink.textContent = 'Terms of Service';
+        links.appendChild(termsLink);
+      }
+      
+      if (settings.advanced.customPrivacyUrl) {
+        const privacyLink = document.createElement('a');
+        privacyLink.href = settings.advanced.customPrivacyUrl;
+        privacyLink.target = '_blank';
+        privacyLink.rel = 'noopener noreferrer';
+        privacyLink.style.color = settings.customization.primaryColor;
+        privacyLink.textContent = 'Privacy Policy';
+        links.appendChild(privacyLink);
+      }
+      
+      content.appendChild(links);
+    }
+    
+    bannerElement.appendChild(content);
+    
+    // Create buttons container
+    const buttonsContainer = document.createElement('div');
+    buttonsContainer.style.display = 'flex';
+    buttonsContainer.style.justifyContent = 'flex-end';
+    buttonsContainer.style.gap = '8px';
+    buttonsContainer.style.flexWrap = 'wrap';
+    
+    // Create Accept All button
+    const acceptAllButton = document.createElement('button');
+    acceptAllButton.textContent = settings.consentText.acceptAllButton;
+    Object.assign(acceptAllButton.style, {
+      padding: '8px 16px',
+      borderRadius: `${settings.customization.cornerRadius}px`,
+      border: 'none',
+      backgroundColor: settings.customization.primaryColor,
+      color: settings.customization.buttonTextColor,
+      cursor: 'pointer',
+      fontWeight: 'bold',
+      fontSize: '14px'
+    });
+    acceptAllButton.addEventListener('click', acceptAll);
+    buttonsContainer.appendChild(acceptAllButton);
+    
+    // Create Reject All button
+    const rejectAllButton = document.createElement('button');
+    rejectAllButton.textContent = settings.consentText.rejectAllButton;
+    Object.assign(rejectAllButton.style, {
+      padding: '8px 16px',
+      borderRadius: `${settings.customization.cornerRadius}px`,
+      border: `1px solid ${settings.customization.primaryColor}`,
+      backgroundColor: 'transparent',
+      color: settings.customization.primaryColor,
+      cursor: 'pointer',
+      fontWeight: 'bold',
+      fontSize: '14px'
+    });
+    rejectAllButton.addEventListener('click', rejectAll);
+    buttonsContainer.appendChild(rejectAllButton);
+    
+    // Create Customize button
+    const customizeButton = document.createElement('button');
+    customizeButton.textContent = settings.consentText.customizeButton;
+    Object.assign(customizeButton.style, {
+      padding: '8px 16px',
+      borderRadius: `${settings.customization.cornerRadius}px`,
+      border: `1px solid ${settings.customization.textColor}`,
+      opacity: '0.7',
+      backgroundColor: 'transparent',
+      color: settings.customization.textColor,
+      cursor: 'pointer',
+      fontSize: '14px'
+    });
+    customizeButton.addEventListener('click', showModal);
+    buttonsContainer.appendChild(customizeButton);
+    
+    bannerElement.appendChild(buttonsContainer);
+    
+    // Add to DOM
     document.body.appendChild(bannerElement);
-    
-    // Add event listeners
-    document.getElementById('privacyvet-accept-all').addEventListener('click', () => {
-      acceptAll();
-      hideBanner();
-    });
-    
-    document.getElementById('privacyvet-reject-all').addEventListener('click', () => {
-      rejectAll();
-      hideBanner();
-    });
-    
-    document.getElementById('privacyvet-customize').addEventListener('click', () => {
-      hideBanner();
-      showModal();
-    });
   }
   
   /**
    * Get CSS position styles based on position setting
    */
   function getPositionStyles(position) {
-    switch(position) {
-      case 'top':
-        return 'top: 0; left: 50%; transform: translateX(-50%);';
-      case 'top-left':
-        return 'top: 0; left: 0;';
-      case 'top-right':
-        return 'top: 0; right: 0;';
-      case 'bottom-left':
-        return 'bottom: 0; left: 0;';
-      case 'bottom-right':
-        return 'bottom: 0; right: 0;';
+    switch (position) {
       case 'bottom':
+        return {
+          bottom: '20px',
+          left: '20px',
+          right: '20px'
+        };
+      case 'top':
+        return {
+          top: '20px',
+          left: '20px',
+          right: '20px'
+        };
+      case 'bottom-left':
+        return {
+          bottom: '20px',
+          left: '20px'
+        };
+      case 'bottom-right':
+        return {
+          bottom: '20px',
+          right: '20px'
+        };
+      case 'top-left':
+        return {
+          top: '20px',
+          left: '20px'
+        };
+      case 'top-right':
+        return {
+          top: '20px',
+          right: '20px'
+        };
       default:
-        return 'bottom: 0; left: 50%; transform: translateX(-50%);';
+        return {
+          bottom: '20px',
+          left: '20px',
+          right: '20px'
+        };
     }
   }
   
@@ -321,129 +613,219 @@
   function showModal() {
     if (modalElement) return;
     
-    // Create modal backdrop
-    const backdrop = document.createElement('div');
-    backdrop.id = 'privacyvet-modal-backdrop';
-    backdrop.style.cssText = `
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100vw;
-      height: 100vh;
-      background-color: rgba(0, 0, 0, 0.5);
-      z-index: 1000000;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      padding: 16px;
-      box-sizing: border-box;
-    `;
+    // Hide banner if it exists
+    hideBanner();
     
-    // Create modal element
-    modalElement = document.createElement('div');
-    modalElement.id = 'privacyvet-modal';
-    modalElement.style.cssText = `
-      background-color: ${settings.customization.backgroundColor};
-      color: ${settings.customization.textColor};
-      border-radius: ${settings.customization.cornerRadius}px;
-      max-width: 500px;
-      width: 100%;
-      max-height: 90vh;
-      overflow-y: auto;
-      padding: 24px;
-      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
-      font-family: ${settings.customization.font}, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      box-sizing: border-box;
-    `;
-    
-    const categoryChecks = Object.keys(settings.cookieCategories)
-      .map(category => {
-        const isDisabled = category === 'necessary';
-        const isChecked = isDisabled || consent[category];
-        
-        return `
-          <div style="display: flex; align-items: center; margin-bottom: 16px; padding: 12px; border: 1px solid #e5e7eb; border-radius: ${settings.customization.cornerRadius}px;">
-            <div style="flex: 1;">
-              <label style="display: flex; align-items: center; cursor: ${isDisabled ? 'default' : 'pointer'};">
-                <input 
-                  type="checkbox" 
-                  name="privacyvet-category-${category}"
-                  value="${category}"
-                  ${isChecked ? 'checked' : ''}
-                  ${isDisabled ? 'disabled' : ''}
-                  style="margin-right: 8px; width: 16px; height: 16px; cursor: ${isDisabled ? 'default' : 'pointer'};"
-                >
-                <div>
-                  <div style="font-weight: 600; text-transform: capitalize;">${category}</div>
-                  <div style="font-size: 12px; color: #6b7280; margin-top: 4px;">
-                    ${getCategoryDescription(category)}
-                  </div>
-                </div>
-              </label>
-            </div>
-          </div>
-        `;
-      })
-      .join('');
-    
-    modalElement.innerHTML = `
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-        <h3 style="margin: 0; font-size: 20px; font-weight: 600;">${settings.consentText.title}</h3>
-        <button id="privacyvet-modal-close" style="
-          background: none;
-          border: none;
-          cursor: pointer;
-          font-size: 24px;
-          line-height: 1;
-          padding: 0;
-          color: ${settings.customization.textColor};
-        ">&times;</button>
-      </div>
-      <p style="margin: 0 0 24px; font-size: 14px; line-height: 1.5;">
-        ${settings.consentText.description}
-      </p>
-      <div style="margin-bottom: 24px;">
-        ${categoryChecks}
-      </div>
-      <div style="display: flex; gap: 8px; justify-content: flex-end;">
-        <button id="privacyvet-modal-save" style="
-          padding: 10px 20px;
-          border: none;
-          border-radius: ${settings.customization.cornerRadius}px;
-          background-color: ${settings.customization.primaryColor};
-          color: ${settings.customization.buttonTextColor};
-          font-weight: 600;
-          font-size: 14px;
-          cursor: pointer;
-        ">${settings.consentText.savePreferencesButton}</button>
-      </div>
-    `;
-    
-    backdrop.appendChild(modalElement);
-    document.body.appendChild(backdrop);
-    
-    // Add event listeners
-    document.getElementById('privacyvet-modal-close').addEventListener('click', hideModal);
-    document.getElementById('privacyvet-modal-save').addEventListener('click', () => {
-      savePreferences();
-      hideModal();
+    // Create modal container and overlay
+    const modalOverlay = document.createElement('div');
+    modalOverlay.className = 'privacyvet-modal-overlay';
+    Object.assign(modalOverlay.style, {
+      position: 'fixed',
+      top: '0',
+      left: '0',
+      right: '0',
+      bottom: '0',
+      backgroundColor: 'rgba(0, 0, 0, 0.5)',
+      display: 'flex',
+      justifyContent: 'center',
+      alignItems: 'center',
+      zIndex: '10000'
     });
     
-    // Close if clicking outside the modal
-    backdrop.addEventListener('click', (e) => {
-      if (e.target === backdrop) {
+    modalElement = document.createElement('div');
+    modalElement.className = 'privacyvet-modal';
+    modalElement.setAttribute('role', 'dialog');
+    modalElement.setAttribute('aria-labelledby', 'privacyvet-modal-title');
+    modalElement.setAttribute('aria-describedby', 'privacyvet-modal-description');
+    Object.assign(modalElement.style, {
+      backgroundColor: settings.customization.backgroundColor,
+      color: settings.customization.textColor,
+      borderRadius: `${settings.customization.cornerRadius}px`,
+      padding: '24px',
+      maxWidth: '500px',
+      width: '90%',
+      maxHeight: '90vh',
+      overflowY: 'auto',
+      boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+      fontFamily: settings.customization.font
+    });
+    
+    // Create modal content
+    const modalContent = document.createElement('div');
+    
+    // Add title
+    const title = document.createElement('div');
+    title.id = 'privacyvet-modal-title';
+    title.style.fontSize = '20px';
+    title.style.fontWeight = 'bold';
+    title.style.marginBottom = '16px';
+    title.textContent = 'Privacy Preferences';
+    modalContent.appendChild(title);
+    
+    // Add description
+    const description = document.createElement('div');
+    description.id = 'privacyvet-modal-description';
+    description.style.marginBottom = '24px';
+    description.textContent = 'Customize your cookie preferences below. Some cookies are necessary for the website to function properly and cannot be disabled.';
+    modalContent.appendChild(description);
+    
+    // Add categories
+    const categories = document.createElement('div');
+    categories.style.marginBottom = '24px';
+    
+    // Add each category
+    for (const category in settings.cookieCategories) {
+      if (settings.cookieCategories[category]) {
+        const categoryContainer = document.createElement('div');
+        categoryContainer.style.marginBottom = '16px';
+        categoryContainer.style.padding = '12px';
+        categoryContainer.style.border = `1px solid ${settings.customization.textColor}20`;
+        categoryContainer.style.borderRadius = `${settings.customization.cornerRadius}px`;
+        
+        const categoryHeader = document.createElement('div');
+        categoryHeader.style.display = 'flex';
+        categoryHeader.style.justifyContent = 'space-between';
+        categoryHeader.style.alignItems = 'center';
+        categoryHeader.style.marginBottom = '8px';
+        
+        const categoryTitle = document.createElement('div');
+        categoryTitle.style.fontWeight = 'bold';
+        categoryTitle.textContent = capitalizeFirstLetter(category);
+        categoryHeader.appendChild(categoryTitle);
+        
+        const categorySwitch = document.createElement('div');
+        categorySwitch.style.display = 'flex';
+        categorySwitch.style.alignItems = 'center';
+        
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.name = `privacyvet-category-${category}`;
+        checkbox.id = `privacyvet-category-${category}`;
+        checkbox.checked = category === 'necessary' ? true : consent[category];
+        checkbox.disabled = category === 'necessary'; // Necessary cookies cannot be disabled
+        checkbox.style.marginRight = '8px';
+        categorySwitch.appendChild(checkbox);
+        
+        const label = document.createElement('label');
+        label.htmlFor = `privacyvet-category-${category}`;
+        label.textContent = category === 'necessary' ? 'Always active' : 'Active';
+        categorySwitch.appendChild(label);
+        
+        categoryHeader.appendChild(categorySwitch);
+        categoryContainer.appendChild(categoryHeader);
+        
+        // Add category description
+        const categoryDescription = document.createElement('div');
+        categoryDescription.style.fontSize = '14px';
+        categoryDescription.style.opacity = '0.8';
+        categoryDescription.textContent = getCategoryDescription(category);
+        categoryContainer.appendChild(categoryDescription);
+        
+        categories.appendChild(categoryContainer);
+      }
+    }
+    
+    modalContent.appendChild(categories);
+    
+    // Add buttons
+    const buttonsContainer = document.createElement('div');
+    buttonsContainer.style.display = 'flex';
+    buttonsContainer.style.justifyContent = 'space-between';
+    buttonsContainer.style.gap = '8px';
+    buttonsContainer.style.flexWrap = 'wrap';
+    
+    // Group left buttons (Accept all / Reject all)
+    const leftButtons = document.createElement('div');
+    leftButtons.style.display = 'flex';
+    leftButtons.style.gap = '8px';
+    
+    // Accept All button
+    const acceptAllButton = document.createElement('button');
+    acceptAllButton.textContent = settings.consentText.acceptAllButton;
+    Object.assign(acceptAllButton.style, {
+      padding: '8px 16px',
+      borderRadius: `${settings.customization.cornerRadius}px`,
+      border: 'none',
+      backgroundColor: settings.customization.primaryColor,
+      color: settings.customization.buttonTextColor,
+      cursor: 'pointer',
+      fontWeight: 'bold',
+      fontSize: '14px'
+    });
+    acceptAllButton.addEventListener('click', acceptAll);
+    leftButtons.appendChild(acceptAllButton);
+    
+    // Reject All button
+    const rejectAllButton = document.createElement('button');
+    rejectAllButton.textContent = settings.consentText.rejectAllButton;
+    Object.assign(rejectAllButton.style, {
+      padding: '8px 16px',
+      borderRadius: `${settings.customization.cornerRadius}px`,
+      border: `1px solid ${settings.customization.primaryColor}`,
+      backgroundColor: 'transparent',
+      color: settings.customization.primaryColor,
+      cursor: 'pointer',
+      fontWeight: 'bold',
+      fontSize: '14px'
+    });
+    rejectAllButton.addEventListener('click', rejectAll);
+    leftButtons.appendChild(rejectAllButton);
+    
+    buttonsContainer.appendChild(leftButtons);
+    
+    // Save Preferences button
+    const saveButton = document.createElement('button');
+    saveButton.textContent = settings.consentText.savePreferencesButton;
+    Object.assign(saveButton.style, {
+      padding: '8px 16px',
+      borderRadius: `${settings.customization.cornerRadius}px`,
+      border: 'none',
+      backgroundColor: settings.customization.primaryColor,
+      color: settings.customization.buttonTextColor,
+      cursor: 'pointer',
+      fontWeight: 'bold',
+      fontSize: '14px'
+    });
+    saveButton.addEventListener('click', savePreferences);
+    buttonsContainer.appendChild(saveButton);
+    
+    modalContent.appendChild(buttonsContainer);
+    modalElement.appendChild(modalContent);
+    modalOverlay.appendChild(modalElement);
+    
+    // Add close button in corner
+    const closeButton = document.createElement('button');
+    closeButton.textContent = '×';
+    Object.assign(closeButton.style, {
+      position: 'absolute',
+      top: '8px',
+      right: '8px',
+      background: 'none',
+      border: 'none',
+      fontSize: '24px',
+      cursor: 'pointer',
+      color: settings.customization.textColor,
+      opacity: '0.7'
+    });
+    closeButton.addEventListener('click', hideModal);
+    modalElement.appendChild(closeButton);
+    
+    // Close modal when clicking outside of it
+    modalOverlay.addEventListener('click', (event) => {
+      if (event.target === modalOverlay) {
         hideModal();
       }
     });
+    
+    document.body.appendChild(modalOverlay);
   }
   
   /**
    * Hide the preferences modal
    */
   function hideModal() {
-    const backdrop = document.getElementById('privacyvet-modal-backdrop');
-    if (backdrop && backdrop.parentNode) {
-      backdrop.parentNode.removeChild(backdrop);
+    if (modalElement && modalElement.parentNode) {
+      modalElement.parentNode.parentNode.removeChild(modalElement.parentNode);
       modalElement = null;
     }
   }
@@ -452,19 +834,19 @@
    * Get description for cookie category
    */
   function getCategoryDescription(category) {
-    switch(category) {
+    switch (category) {
       case 'necessary':
-        return 'Essential cookies that are required for the website to function properly.';
+        return 'These cookies are required for the website to function properly. They cannot be disabled.';
       case 'preferences':
-        return 'Cookies that remember your preferences and choices on the website.';
+        return 'These cookies allow the website to remember choices you make and provide enhanced, personalized features.';
       case 'analytics':
-        return 'Cookies that help us understand how you use the website to improve user experience.';
+        return 'These cookies help us understand how visitors interact with our website, helping us improve our website and services.';
       case 'marketing':
-        return 'Cookies used to deliver advertisements that are relevant to you and your interests.';
+        return 'These cookies are used to track visitors across websites to display relevant advertisements.';
       case 'thirdParty':
-        return 'Cookies set by third-party services embedded on our website.';
+        return 'These cookies are set by third-party services that appear on our pages.';
       default:
-        return '';
+        return 'Cookies used to provide functionality on the website.';
     }
   }
   
@@ -480,6 +862,8 @@
     });
     consent = newConsent;
     saveConsent();
+    hideBanner();
+    hideModal();
   }
   
   /**
@@ -492,6 +876,8 @@
     });
     consent = newConsent;
     saveConsent();
+    hideBanner();
+    hideModal();
   }
   
   /**
@@ -509,12 +895,25 @@
     });
     consent = newConsent;
     saveConsent();
+    hideModal();
   }
   
-  // Initialize when DOM is loaded
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    init();
+  /**
+   * Helper function to capitalize first letter
+   */
+  function capitalizeFirstLetter(string) {
+    return string.charAt(0).toUpperCase() + string.slice(1);
   }
+  
+  // Start the cookie consent manager if auto init is enabled
+  if (autoInit && typeof document !== 'undefined') {
+    // Initialize immediately if document is already loaded
+    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+      setTimeout(init, 0);
+    } else {
+      // Wait for DOM to be ready
+      document.addEventListener('DOMContentLoaded', init);
+    }
+  }
+
 })();

@@ -1,4 +1,3 @@
-
 import Header from "@/components/PrivateDashboard/DashboardHeader";
 import LogoutForm from "@/components/PrivateDashboard/LogoutForm";
 import Sidebar from "@/components/PrivateDashboard/Sidebar";
@@ -14,7 +13,7 @@ function Dashboard() {
 
   return (
     <>
-      <div className="bg-gray-50 min-h-[calc(100vh-25px)]">
+      <div className="bg-gray-50 dark:bg-gray-900 min-h-[calc(100vh-25px)]">
         <Sidebar isSidebarOpen={isSidebarOpen} />
         <Header
           toggleSidebar={() => {

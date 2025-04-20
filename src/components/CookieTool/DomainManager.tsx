@@ -1,324 +1,464 @@
-import React, { useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { 
-  Table, 
-  TableBody, 
-  TableCell, 
-  TableHead, 
-  TableHeader, 
-  TableRow 
-} from "@/components/ui/table";
-import { 
-  Dialog, 
-  DialogContent, 
-  DialogDescription, 
-  DialogFooter, 
-  DialogHeader, 
-  DialogTitle 
-} from "@/components/ui/dialog";
-import { Badge } from "@/components/ui/badge";
-import { Copy, Check, X, ExternalLink, AlertTriangle } from "lucide-react";
+import React, { useState, useEffect } from 'react';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+  CardFooter
+} from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { toast } from '@/components/ui/use-toast';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
+import { Copy, CheckCircle, Globe, Shield, Trash2, AlertTriangle, Loader2 } from 'lucide-react';
+import { CookieToolService, Domain } from '@/services/cookieToolService';
 
-interface Domain {
-  id: string;
-  domain: string;
-  verified: boolean;
-  status: 'active' | 'pending' | 'error';
-  dateAdded: string;
-  banners: string[];
-}
-
-const DomainManager: React.FC = () => {
-  const [domains, setDomains] = useState<Domain[]>([
-    {
-      id: "1",
-      domain: "example.com",
-      verified: true,
-      status: "active",
-      dateAdded: "2025-03-15",
-      banners: ["Standard Cookie Banner"]
-    },
-    {
-      id: "2",
-      domain: "test-site.org",
-      verified: false,
-      status: "pending",
-      dateAdded: "2025-04-10",
-      banners: []
-    }
-  ]);
-
-  const [showAddDomain, setShowAddDomain] = useState(false);
-  const [showVerifyDialog, setShowVerifyDialog] = useState(false);
+export function DomainManager() {
+  const [domains, setDomains] = useState<Domain[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [verifyDialogOpen, setVerifyDialogOpen] = useState(false);
   const [selectedDomain, setSelectedDomain] = useState<Domain | null>(null);
-  const [newDomain, setNewDomain] = useState("");
-  const [validationCode, setValidationCode] = useState("");
-  const [copied, setCopied] = useState(false);
-  const [error, setError] = useState("");
+  const [newDomainInput, setNewDomainInput] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
-  const handleAddDomain = () => {
-    if (!newDomain) {
-      setError("Please enter a domain");
+  useEffect(() => {
+    loadDomains();
+  }, []);
+
+  const loadDomains = async () => {
+    setLoading(true);
+    try {
+      const domains = await CookieToolService.getDomains();
+      setDomains(domains);
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: 'Failed to load domains',
+        variant: 'destructive'
+      });
+      console.error('Failed to load domains:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAddDomain = async () => {
+    if (!newDomainInput) {
+      toast({
+        title: 'Error',
+        description: 'Please enter a domain name',
+        variant: 'destructive'
+      });
       return;
     }
 
-    // Simple domain validation
-    const domainRegex = /^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
-    if (!domainRegex.test(newDomain)) {
-      setError("Please enter a valid domain (e.g., example.com)");
+    // Basic domain validation
+    const domainPattern = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$/;
+    if (!domainPattern.test(newDomainInput)) {
+      toast({
+        title: 'Invalid Domain',
+        description: 'Please enter a valid domain name (e.g., example.com)',
+        variant: 'destructive'
+      });
       return;
     }
 
-    // Check if domain already exists
-    if (domains.some(d => d.domain === newDomain)) {
-      setError("This domain has already been added");
-      return;
+    setAdding(true);
+    try {
+      const newDomain = await CookieToolService.addDomain(newDomainInput);
+      
+      // Update local state
+      setDomains([...domains, newDomain]);
+      
+      // Close dialog and reset input
+      setAddDialogOpen(false);
+      setNewDomainInput('');
+      
+      // Show success message with verification instructions
+      toast({
+        title: 'Domain Added',
+        description: 'Domain was added successfully. Please verify ownership to use it.',
+      });
+
+      // Open the verification dialog
+      setSelectedDomain(newDomain);
+      setVerifyDialogOpen(true);
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: 'Failed to add domain. It might already exist in your account.',
+        variant: 'destructive'
+      });
+      console.error('Failed to add domain:', error);
+    } finally {
+      setAdding(false);
     }
-
-    const newDomainObj: Domain = {
-      id: Math.random().toString(36).substring(2, 9),
-      domain: newDomain,
-      verified: false,
-      status: "pending",
-      dateAdded: new Date().toISOString().split('T')[0],
-      banners: []
-    };
-
-    setDomains([...domains, newDomainObj]);
-    setNewDomain("");
-    setError("");
-    setShowAddDomain(false);
   };
 
-  const copyVerificationCode = () => {
-    navigator.clipboard.writeText(validationCode);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const startVerification = (domain: Domain) => {
-    setSelectedDomain(domain);
-    setValidationCode(`privacyvet-verify=${domain.id}-${Math.random().toString(36).substring(2, 15)}`);
-    setShowVerifyDialog(true);
-  };
-
-  const completeVerification = () => {
-    if (selectedDomain) {
+  const handleVerifyDomain = async (domain: Domain) => {
+    setVerifying(true);
+    try {
+      await CookieToolService.verifyDomain(domain.id);
+      
+      // Update local state
       setDomains(domains.map(d => 
-        d.id === selectedDomain.id 
-          ? { ...d, verified: true, status: "active" } 
-          : d
+        d.id === domain.id ? { ...d, verified: true } : d
       ));
-      setShowVerifyDialog(false);
+      
+      // Close dialog
+      setVerifyDialogOpen(false);
+      setSelectedDomain(null);
+      
+      toast({
+        title: 'Success',
+        description: 'Domain verified successfully!',
+      });
+    } catch (error) {
+      toast({
+        title: 'Verification Failed',
+        description: 'Could not verify domain ownership. Please check that you\'ve added the verification file correctly.',
+        variant: 'destructive'
+      });
+      console.error('Failed to verify domain:', error);
+    } finally {
+      setVerifying(false);
     }
   };
 
-  const removeDomain = (domainId: string) => {
-    setDomains(domains.filter(d => d.id !== domainId));
+  const handleDeleteDomain = async (domain: Domain) => {
+    setDeleting(true);
+    try {
+      await CookieToolService.removeDomain(domain.id);
+      
+      // Update local state
+      setDomains(domains.filter(d => d.id !== domain.id));
+      
+      toast({
+        title: 'Domain Removed',
+        description: 'Domain was removed successfully',
+      });
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: 'Failed to remove domain',
+        variant: 'destructive'
+      });
+      console.error('Failed to remove domain:', error);
+    } finally {
+      setDeleting(false);
+    }
   };
 
-  return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-semibold">Domain Management</h2>
-        <Button onClick={() => setShowAddDomain(true)}>Add Domain</Button>
-      </div>
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text)
+      .then(() => {
+        toast({
+          title: 'Copied',
+          description: 'Verification code copied to clipboard',
+        });
+      })
+      .catch(err => {
+        console.error('Error copying text: ', err);
+        toast({
+          title: 'Error',
+          description: 'Failed to copy to clipboard',
+          variant: 'destructive'
+        });
+      });
+  };
 
-      <div className="rounded-md border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-1/4">Domain</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Date Added</TableHead>
-              <TableHead>Banners</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {domains.length === 0 ? (
+  const generateVerificationInstructions = (domain: Domain) => {
+    return (
+      <div className="space-y-4">
+        <p>To verify your ownership of <strong>{domain.domain}</strong>, you need to create a file called:</p>
+        
+        <code className="bg-gray-100 dark:bg-gray-800 p-2 rounded block overflow-x-auto">
+          privacyvet-verify-{domain.verification_key.substring(0, 8)}.html
+        </code>
+        
+        <p>with the following content:</p>
+        
+        <div className="relative">
+          <code className="bg-gray-100 dark:bg-gray-800 p-2 rounded block overflow-x-auto">
+            {domain.verification_key}
+          </code>
+          <Button 
+            variant="ghost" 
+            size="icon"
+            className="absolute right-2 top-2" 
+            onClick={() => copyToClipboard(domain.verification_key)}
+          >
+            <Copy className="h-4 w-4" />
+          </Button>
+        </div>
+        
+        <p>Upload this file to your web server so it's accessible at:</p>
+        
+        <code className="bg-gray-100 dark:bg-gray-800 p-2 rounded block overflow-x-auto">
+          https://{domain.domain}/privacyvet-verify-{domain.verification_key.substring(0, 8)}.html
+        </code>
+        
+        <p>Once you've uploaded the file, click "Verify" to complete the process.</p>
+      </div>
+    );
+  };
+
+  const renderDomainTable = () => {
+    if (loading) {
+      return (
+        <div className="flex justify-center items-center h-64">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        </div>
+      );
+    }
+    
+    if (domains.length === 0) {
+      return (
+        <div className="text-center py-12">
+          <Globe className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+          <h3 className="text-lg font-medium">No domains added yet</h3>
+          <p className="text-muted-foreground mb-4">
+            Add your first domain to start managing cookie consents
+          </p>
+          <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
+            <DialogTrigger asChild>
+              <Button>Add Your First Domain</Button>
+            </DialogTrigger>
+            <AddDomainDialog 
+              onAdd={handleAddDomain}
+              adding={adding}
+              domainInput={newDomainInput}
+              setDomainInput={setNewDomainInput}
+            />
+          </Dialog>
+        </div>
+      );
+    }
+    
+    return (
+      <>
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-semibold">Your Domains</h2>
+          <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
+            <DialogTrigger asChild>
+              <Button>Add New Domain</Button>
+            </DialogTrigger>
+            <AddDomainDialog 
+              onAdd={handleAddDomain}
+              adding={adding}
+              domainInput={newDomainInput}
+              setDomainInput={setNewDomainInput}
+            />
+          </Dialog>
+        </div>
+        
+        <div className="border rounded-lg overflow-hidden">
+          <Table>
+            <TableHeader>
               <TableRow>
-                <TableCell colSpan={5} className="text-center py-6 text-muted-foreground">
-                  No domains added yet. Add your first domain to get started.
-                </TableCell>
+                <TableHead>Domain</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="w-[100px]">Actions</TableHead>
               </TableRow>
-            ) : (
-              domains.map(domain => (
+            </TableHeader>
+            <TableBody>
+              {domains.map((domain) => (
                 <TableRow key={domain.id}>
-                  <TableCell className="font-medium">{domain.domain}</TableCell>
+                  <TableCell className="font-medium">
+                    {domain.domain}
+                  </TableCell>
                   <TableCell>
-                    {domain.status === "active" ? (
-                      <Badge className="bg-green-500 hover:bg-green-600">Active</Badge>
-                    ) : domain.status === "pending" ? (
-                      <Badge variant="outline" className="border-yellow-500 text-yellow-600">Pending Verification</Badge>
+                    {domain.verified ? (
+                      <div className="flex items-center text-green-600">
+                        <CheckCircle className="h-4 w-4 mr-2" />
+                        Verified
+                      </div>
                     ) : (
-                      <Badge variant="outline" className="border-red-500 text-red-600">Error</Badge>
+                      <div className="flex items-center text-amber-600">
+                        <AlertTriangle className="h-4 w-4 mr-2" />
+                        Unverified
+                      </div>
                     )}
                   </TableCell>
-                  <TableCell>{domain.dateAdded}</TableCell>
                   <TableCell>
-                    {domain.banners.length > 0 ? (
-                      <div>{domain.banners.join(", ")}</div>
-                    ) : (
-                      <span className="text-muted-foreground text-sm">No banners</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex justify-end gap-2">
-                      <Button 
-                        size="sm" 
-                        variant="outline"
-                        onClick={() => window.open(`https://${domain.domain}`, '_blank')}
-                        title="Visit domain"
-                      >
-                        <ExternalLink className="h-4 w-4" />
-                      </Button>
+                    <div className="flex gap-2">
                       {!domain.verified && (
-                        <Button 
-                          size="sm" 
-                          variant="outline"
-                          onClick={() => startVerification(domain)}
-                          title="Verify domain"
-                        >
-                          <Check className="h-4 w-4" />
-                        </Button>
+                        <Dialog open={verifyDialogOpen && selectedDomain?.id === domain.id} onOpenChange={(open) => {
+                          setVerifyDialogOpen(open);
+                          if (!open) setSelectedDomain(null);
+                        }}>
+                          <DialogTrigger asChild>
+                            <Button 
+                              variant="outline" 
+                              size="sm"
+                              onClick={() => setSelectedDomain(domain)}
+                            >
+                              <Shield className="h-4 w-4 mr-1" />
+                              Verify
+                            </Button>
+                          </DialogTrigger>
+                          <DialogContent className="max-w-md">
+                            <DialogHeader>
+                              <DialogTitle>Verify Domain Ownership</DialogTitle>
+                              <DialogDescription>
+                                Follow these steps to verify your ownership of this domain
+                              </DialogDescription>
+                            </DialogHeader>
+                            {selectedDomain && generateVerificationInstructions(selectedDomain)}
+                            <DialogFooter>
+                              <Button
+                                onClick={() => handleVerifyDomain(selectedDomain!)}
+                                disabled={verifying}
+                              >
+                                {verifying ? (
+                                  <>
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    Verifying...
+                                  </>
+                                ) : (
+                                  <>Verify</>
+                                )}
+                              </Button>
+                            </DialogFooter>
+                          </DialogContent>
+                        </Dialog>
                       )}
-                      <Button 
-                        size="sm" 
-                        variant="outline" 
-                        className="text-red-500 hover:text-red-700"
-                        onClick={() => removeDomain(domain.id)}
-                        title="Remove domain"
-                      >
-                        <X className="h-4 w-4" />
-                      </Button>
+                      
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button variant="outline" size="sm" className="text-red-500 border-red-200">
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Remove Domain</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              Are you sure you want to remove {domain.domain}? This action cannot be undone, and all cookie banners for this domain will be deleted.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel>Cancel</AlertDialogCancel>
+                            <AlertDialogAction
+                              className="bg-red-500 hover:bg-red-600"
+                              onClick={() => handleDeleteDomain(domain)}
+                              disabled={deleting}
+                            >
+                              {deleting ? (
+                                <>
+                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                  Removing...
+                                </>
+                              ) : (
+                                <>Remove</>
+                              )}
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
                     </div>
                   </TableCell>
                 </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </div>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </>
+    );
+  };
 
-      {/* Add Domain Dialog */}
-      <Dialog open={showAddDomain} onOpenChange={setShowAddDomain}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Add Domain</DialogTitle>
-            <DialogDescription>
-              Add a domain where you want to display cookie consent banners
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="domain">Domain Name</Label>
-              <Input
-                id="domain"
-                placeholder="example.com"
-                value={newDomain}
-                onChange={(e) => setNewDomain(e.target.value)}
-              />
-              {error && <p className="text-sm text-red-500">{error}</p>}
-              <p className="text-sm text-muted-foreground">
-                Enter your website domain without http:// or www
-              </p>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => {
-              setShowAddDomain(false);
-              setError("");
-              setNewDomain("");
-            }}>
-              Cancel
-            </Button>
-            <Button onClick={handleAddDomain}>Add Domain</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Verify Domain Dialog */}
-      <Dialog open={showVerifyDialog} onOpenChange={setShowVerifyDialog}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Verify Domain Ownership</DialogTitle>
-            <DialogDescription>
-              Verify that you own {selectedDomain?.domain}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="rounded-md bg-muted p-4 space-y-4">
-              <div>
-                <Label className="mb-1 block">Option 1: Add a META tag</Label>
-                <div className="relative">
-                  <pre className="text-xs bg-black text-white p-3 rounded-md overflow-x-auto">
-                    {`<meta name="privacyvet-verification" content="${validationCode}" />`}
-                  </pre>
-                  <Button 
-                    size="sm" 
-                    variant="ghost" 
-                    className="absolute top-1 right-1 h-7 w-7 p-0" 
-                    onClick={copyVerificationCode}
-                  >
-                    {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                  </Button>
-                </div>
-                <p className="text-xs text-muted-foreground mt-2">
-                  Add this meta tag to the head section of your website's home page.
-                </p>
-              </div>
-
-              <div>
-                <Label className="mb-1 block">Option 2: Create a text file</Label>
-                <p className="text-xs text-muted-foreground">
-                  Create a text file at:
-                </p>
-                <code className="text-xs block mt-1 mb-1">
-                  {`https://${selectedDomain?.domain}/privacyvet.txt`}
-                </code>
-                <p className="text-xs text-muted-foreground">
-                  with the following content:
-                </p>
-                <div className="relative">
-                  <pre className="text-xs bg-black text-white p-3 rounded-md overflow-x-auto">
-                    {validationCode}
-                  </pre>
-                  <Button 
-                    size="sm" 
-                    variant="ghost" 
-                    className="absolute top-1 right-1 h-7 w-7 p-0" 
-                    onClick={copyVerificationCode}
-                  >
-                    {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                  </Button>
-                </div>
-              </div>
-            </div>
-            <div className="flex items-start gap-2">
-              <AlertTriangle className="h-5 w-5 text-yellow-500 shrink-0 mt-1" />
-              <p className="text-sm text-muted-foreground">
-                Domain verification is required to ensure banners are only displayed on websites you control.
-              </p>
-            </div>
-          </div>
-          <DialogFooter className="gap-2">
-            <Button
-              variant="outline"
-              onClick={() => setShowVerifyDialog(false)}
-            >
-              Cancel
-            </Button>
-            <Button onClick={completeVerification}>
-              Verify Domain
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+  return (
+    <div>
+      {renderDomainTable()}
     </div>
   );
-};
+}
 
-export default DomainManager;
+interface AddDomainDialogProps {
+  onAdd: () => void;
+  adding: boolean;
+  domainInput: string;
+  setDomainInput: (value: string) => void;
+}
+
+function AddDomainDialog({ onAdd, adding, domainInput, setDomainInput }: AddDomainDialogProps) {
+  return (
+    <DialogContent className="sm:max-w-md">
+      <DialogHeader>
+        <DialogTitle>Add Domain</DialogTitle>
+        <DialogDescription>
+          Enter the domain you want to add to your cookie consent management tool.
+        </DialogDescription>
+      </DialogHeader>
+      <div className="py-4">
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="domain">Domain</Label>
+            <Input
+              id="domain"
+              placeholder="example.com"
+              value={domainInput}
+              onChange={(e) => setDomainInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  onAdd();
+                }
+              }}
+            />
+            <p className="text-xs text-muted-foreground">
+              Enter only the domain name without 'http://' or 'https://'
+            </p>
+          </div>
+        </div>
+      </div>
+      <DialogFooter>
+        <Button
+          onClick={onAdd}
+          disabled={adding}
+        >
+          {adding ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Adding...
+            </>
+          ) : (
+            <>Add Domain</>
+          )}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  );
+}

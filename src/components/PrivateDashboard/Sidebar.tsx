@@ -12,24 +12,22 @@ function Sidebar({ isSidebarOpen }: { isSidebarOpen: boolean }) {
     { icon: Globe, text: "Subdomains",link:"subdomains" },
     { icon: Cookie, text: "Cookie Tool",link:"cookie-tool" },
   ];
-  // Change Icons
 
   return (
-    <div className={`bg-primary text-white h-screen fixed top-0 left-0 transition-all duration-100 ${isSidebarOpen ? "w-64" : "w-20"}`}>
+    <div className={`bg-primary dark:bg-gray-900 text-white h-screen fixed top-0 left-0 transition-all duration-100 ${isSidebarOpen ? "w-64" : "w-20"}`}>
       <div className="p-4 flex items-center justify-center h-16 border-b border-gray-800">
         <span className={`font-bold text-xl ${!isSidebarOpen && "hidden"}`}>Dashboard</span>
       </div>
       <nav className="p-4">
-        {menuItems.map((item, i) => (
+        {menuItems.map((item) => (
           <NavLink
           key={item.text}
           to={item.link}
-          className="flex items-center mb-2 gap-4 text-gray-100 hover:text-white hover:bg-[rgb(22,156,207)] rounded-lg p-3 transition-colors h-[50px]"
+          className={({isActive}) => `flex items-center mb-2 gap-4 text-gray-100 hover:text-white hover:bg-[rgb(22,156,207)] dark:hover:bg-blue-700 rounded-lg p-3 transition-colors h-[50px] ${isActive ? 'bg-[rgb(22,156,207)] dark:bg-blue-700' : ''}`}
         >
           <item.icon size={20} color="white" />
           <span className={`${!isSidebarOpen && "hidden"} text-white`}>{item.text}</span>
         </NavLink>
-
         ))}
       </nav>
     </div>
