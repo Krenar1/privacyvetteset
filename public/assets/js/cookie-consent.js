@@ -1,6 +1,6 @@
 /**
  * PrivacyVet Cookie Consent Manager
- * Version 2.0.1
+ * Version 2.0.0
  * 
  * This script handles cookie consent collection across websites.
  * It displays a cookie banner with customizable categories and settings.
@@ -10,27 +10,22 @@
   'use strict';
 
   // Get script attributes
-  const script = document.currentScript || (function() {
-    // Fallback for when the script is loaded asynchronously
-    const scripts = document.getElementsByTagName('script');
-    return scripts[scripts.length - 1];
-  })();
-  
+  const script = document.currentScript;
   const domainId = script.getAttribute('data-domain-id');
   const domain = script.getAttribute('data-domain') || window.location.hostname;
   const apiUrl = script.getAttribute('data-api-url') || 'https://privacyvet.com/api/cookie-settings';
   const autoInit = script.getAttribute('data-auto-init') !== 'false';
-  const version = '2.0.1';
+  const version = '2.0.0';
 
   // Default settings (will be overridden by server settings)
   const defaultSettings = {
     position: 'bottom',
-    theme: 'dark', // Set to dark theme as requested
-    showLogo: true, // Ensure logo is shown
+    theme: 'light',
+    showLogo: true,
     customization: {
       primaryColor: '#3b82f6',
-      backgroundColor: '#1f2937', // Dark background for dark theme
-      textColor: '#f9fafb', // Light text for dark theme
+      backgroundColor: '#ffffff',
+      textColor: '#1f2937',
       buttonTextColor: '#ffffff',
       font: 'Inter, system-ui, sans-serif',
       cornerRadius: 6
@@ -65,10 +60,10 @@
     }
   };
 
-  // Storage keys - add a version to force reset when script is updated
-  const CONSENT_STORAGE_KEY = `privacyvet-consent-${domain}-${version}`;
-  const SETTINGS_CACHE_KEY = `privacyvet-settings-${domainId}-${version}`;
-  const SETTINGS_CACHE_TIME_KEY = `privacyvet-settings-time-${domainId}-${version}`;
+  // Storage keys
+  const CONSENT_STORAGE_KEY = `privacyvet-consent-${domain}`;
+  const SETTINGS_CACHE_KEY = `privacyvet-settings-${domainId}`;
+  const SETTINGS_CACHE_TIME_KEY = `privacyvet-settings-time-${domainId}`;
   const CACHE_MAX_AGE = 3600000; // 1 hour in milliseconds
   
   // State variables
@@ -114,12 +109,7 @@
       
       // Only show banner if consent hasn't been given yet
       if (!hasConsent()) {
-        // Wait for DOM to be fully loaded before showing the banner
-        if (document.readyState === 'loading') {
-          document.addEventListener('DOMContentLoaded', createBanner);
-        } else {
-          createBanner();
-        }
+        createBanner();
       } else if (settings.scripts.cookieScript) {
         // If consent was already given and we have cookie scripts to load, load them
         try {
@@ -233,13 +223,28 @@
     if (!domainId) return;
     
     try {
+      // Check if current domain is allowed to use this consent banner
+      const currentDomain = window.location.hostname;
+      
       const response = await fetch(`${apiUrl}/${domainId}`);
       if (!response.ok) {
         throw new Error(`Failed to fetch settings: ${response.statusText}`);
       }
       
+      // Check content type to avoid parsing HTML as JSON
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        throw new Error('Server did not return JSON. Received: ' + contentType);
+      }
+      
       const data = await response.json();
       if (data && data.settings) {
+        // Check if this domain is allowed to use this banner
+        if (data.domain_name && !isAllowedDomain(currentDomain, data.domain_name)) {
+          console.error('PrivacyVet: This domain is not authorized to use this cookie consent banner.');
+          return;
+        }
+        
         // Update settings with server data
         settings = { ...defaultSettings, ...data.settings };
         
@@ -252,6 +257,23 @@
     } finally {
       hasSettingsLoaded = true;
     }
+  }
+  
+  /**
+   * Check if the current domain matches or is subdomain of the allowed domain
+   */
+  function isAllowedDomain(currentDomain, allowedDomain) {
+    // Direct match
+    if (currentDomain === allowedDomain) return true;
+    
+    // Check for subdomains
+    if (currentDomain.endsWith('.' + allowedDomain)) return true;
+    
+    // Allow for www variants
+    if (currentDomain === 'www.' + allowedDomain) return true;
+    if (allowedDomain === 'www.' + currentDomain) return true;
+    
+    return false;
   }
   
   /**
@@ -284,7 +306,20 @@
           preferences: consent.preferences,
           analytics: consent.analytics,
           marketing: consent.marketing,
-          third_party: consent.thirdParty
+          third_party: consent.thirdParty,
+          // Add additional user information
+          user_data: {
+            url: window.location.href,
+            referrer: document.referrer,
+            user_agent: navigator.userAgent,
+            browser: detectBrowser(),
+            os: detectOS(),
+            screen_width: window.screen.width,
+            screen_height: window.screen.height,
+            language: navigator.language,
+            timestamp: new Date().toISOString(),
+            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+          }
         };
         
         // Use sendBeacon if available, as it works even when the page is unloading
@@ -314,6 +349,54 @@
     } catch (error) {
       console.error('Failed to save PrivacyVet consent:', error);
     }
+  }
+
+  /**
+   * Detect user's browser
+   */
+  function detectBrowser() {
+    const userAgent = navigator.userAgent;
+    let browser = "Unknown";
+
+    if (userAgent.indexOf("Firefox") > -1) {
+      browser = "Firefox";
+    } else if (userAgent.indexOf("SamsungBrowser") > -1) {
+      browser = "Samsung Browser";
+    } else if (userAgent.indexOf("Opera") > -1 || userAgent.indexOf("OPR") > -1) {
+      browser = "Opera";
+    } else if (userAgent.indexOf("Edge") > -1 || userAgent.indexOf("Edg") > -1) {
+      browser = "Edge";
+    } else if (userAgent.indexOf("Chrome") > -1) {
+      browser = "Chrome";
+    } else if (userAgent.indexOf("Safari") > -1) {
+      browser = "Safari";
+    } else if (userAgent.indexOf("MSIE") > -1 || userAgent.indexOf("Trident") > -1) {
+      browser = "Internet Explorer";
+    }
+
+    return browser;
+  }
+
+  /**
+   * Detect user's operating system
+   */
+  function detectOS() {
+    const userAgent = navigator.userAgent;
+    let os = "Unknown";
+
+    if (userAgent.indexOf("Win") > -1) {
+      os = "Windows";
+    } else if (userAgent.indexOf("Mac") > -1) {
+      os = "MacOS";
+    } else if (userAgent.indexOf("Linux") > -1) {
+      os = "Linux";
+    } else if (userAgent.indexOf("Android") > -1) {
+      os = "Android";
+    } else if (userAgent.indexOf("iPhone") > -1 || userAgent.indexOf("iPad") > -1 || userAgent.indexOf("iPod") > -1) {
+      os = "iOS";
+    }
+
+    return os;
   }
   
   /**
@@ -433,14 +516,16 @@
     const content = document.createElement('div');
     content.style.marginBottom = '16px';
     
-    // Add logo if enabled - Always show "Powered by PrivacyVet" in the banner
-    const logo = document.createElement('div');
-    logo.style.marginBottom = '8px';
-    logo.style.fontSize = '12px';
-    logo.style.color = settings.customization.textColor;
-    logo.style.opacity = '0.7';
-    logo.textContent = 'Powered by PrivacyVet';
-    content.appendChild(logo);
+    // Add logo if enabled
+    if (settings.showLogo) {
+      const logo = document.createElement('div');
+      logo.style.marginBottom = '8px';
+      logo.style.fontSize = '12px';
+      logo.style.color = settings.customization.textColor;
+      logo.style.opacity = '0.7';
+      logo.textContent = 'Powered by PrivacyVet';
+      content.appendChild(logo);
+    }
     
     // Add title
     const title = document.createElement('div');
@@ -905,15 +990,12 @@
     return string.charAt(0).toUpperCase() + string.slice(1);
   }
   
-  // Start the cookie consent manager if auto init is enabled
-  if (autoInit && typeof document !== 'undefined') {
-    // Initialize immediately if document is already loaded
-    if (document.readyState === 'complete' || document.readyState === 'interactive') {
-      setTimeout(init, 0);
-    } else {
-      // Wait for DOM to be ready
-      document.addEventListener('DOMContentLoaded', init);
-    }
+  // Initialize when DOM is loaded
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+      if (autoInit) init();
+    });
+  } else {
+    if (autoInit) init();
   }
-
 })();
